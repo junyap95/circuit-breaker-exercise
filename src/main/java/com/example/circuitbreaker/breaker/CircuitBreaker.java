@@ -55,10 +55,19 @@ public class CircuitBreaker {
     public CallResult call() {
         Instant now = now();
 
+        if (state == CircuitBreakerState.OPEN) {
+            if (!cooldownElapsed(now)) {
+                return CallResult.REJECTED;
+            }
+            state = CircuitBreakerState.HALF_OPEN;
+        }
+
         boolean succeeded = externalService.call();
 
-        if (!succeeded) {
-            recordFailure(now);
+        if (succeeded) {
+            onSuccess();
+        } else {
+            onFailure(now);
         }
         return succeeded ? CallResult.SUCCESS : CallResult.FAILURE;
     }
@@ -67,7 +76,24 @@ public class CircuitBreaker {
         return state;
     }
 
-    private void recordFailure(Instant now) {
+    /** The trial is allowed once {@code openDuration} has fully elapsed (inclusive). */
+    private boolean cooldownElapsed(Instant now) {
+        return !now.isBefore(openedAt.plus(properties.openDuration()));
+    }
+
+    private void onSuccess() {
+        if (state == CircuitBreakerState.HALF_OPEN) {
+            close();
+        }
+        // While CLOSED a success changes nothing: the window counts failures regardless of
+        // successes in between, so a flapping dependency can still trip the breaker.
+    }
+
+    private void onFailure(Instant now) {
+        if (state == CircuitBreakerState.HALF_OPEN) {
+            open(now); // failed trial: back to OPEN with a fresh cooldown
+            return;
+        }
         recentFailures.addLast(now);
         evictExpiredFailures(now);
         if (recentFailures.size() >= properties.failureThreshold()) {
@@ -86,6 +112,12 @@ public class CircuitBreaker {
     private void open(Instant now) {
         state = CircuitBreakerState.OPEN;
         openedAt = now;
+        recentFailures.clear();
+    }
+
+    private void close() {
+        state = CircuitBreakerState.CLOSED;
+        openedAt = null;
         recentFailures.clear();
     }
 

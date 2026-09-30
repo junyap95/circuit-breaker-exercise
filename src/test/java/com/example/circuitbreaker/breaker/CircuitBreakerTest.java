@@ -146,7 +146,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once open circuits reject calls")
         void callsAreRejectedWithoutReachingTheService() {
             int callsBefore = externalService.invocationCount();
             clock.advanceSeconds(5);
@@ -159,7 +158,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the cooldown is implemented")
         void afterTheCooldownATrialCallReachesTheService() {
             int callsBefore = externalService.invocationCount();
             clock.advance(OPEN_DURATION);
@@ -187,7 +185,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the trial call is implemented")
         void successfulTrialClosesTheCircuit() {
             externalService.willSucceed();
 
@@ -198,7 +195,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the trial call is implemented")
         void successfulTrialClearsTheFailureHistory() {
             externalService.willSucceed();
             breaker.call();
@@ -215,7 +211,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the trial call is implemented")
         void failedTrialKeepsTheCircuitOpen() {
             externalService.willFail();
 
@@ -226,7 +221,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the trial call is implemented")
         void failedTrialStartsAFreshCooldown() {
             externalService.willFail();
             breaker.call(); // failed trial at 12:00:10
