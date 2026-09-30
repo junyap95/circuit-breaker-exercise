@@ -1,23 +1,18 @@
 package com.example.circuitbreaker.breaker;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
  * Behavioural specification for {@link CircuitBreaker}.
- *
- * <p>Tests marked {@code @Disabled} describe behaviour that the starting implementation
- * does not have yet. Remove the annotation as you implement each piece; the goal is a
- * green suite with no {@code @Disabled} left. A few tests near the bottom are left for
- * you to write.
  *
  * <p>Configuration used throughout: 3 failures within 30 seconds opens the circuit;
  * the circuit stays open for 10 seconds. Time starts at 12:00:00 and only moves when
@@ -236,32 +231,104 @@ class CircuitBreakerTest {
         }
     }
 
-    /**
-     * These cases are intentionally left for you. Decide on the behaviour, write the
-     * test, then make it pass. Each one is a good conversation starter with the interviewer.
-     */
     @Nested
-    @DisplayName("TODO(candidate): decide and test")
-    class LeftForTheCandidate {
+    @DisplayName("window boundary")
+    class WindowBoundary {
 
         @Test
-        @Disabled("TODO(candidate): a failure exactly 30 seconds old - inside or outside the window?")
-        void failureExactlyOnTheWindowBoundary() {
-            // Hint: the README states the rule this project uses. Encode it here.
+        void failureExactlyThirtySecondsOldHasExpired() {
+            // Rule: expired when failureTime <= now - 30s. 12:00:00 is exactly 30s old at 12:00:30.
+            externalService.willFail();
+            breaker.call();
+            clock.advanceSeconds(15);
+            breaker.call();
+            clock.advanceSeconds(15);
+            breaker.call();
+
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.CLOSED);
         }
 
         @Test
-        @Disabled("TODO(candidate): should a success while CLOSED forget earlier failures?")
-        void successfulCallWhileClosedAfterSomeFailures() {
-            // Two failures, then a success, then another failure. Is the circuit open or closed?
-            // There is more than one defensible answer - pick one and be ready to justify it.
+        void failureJustInsideThirtySecondsIsStillCounted() {
+            // 12:00:00, 12:00:15, 12:00:29 - the first failure is 29s old and still counts.
+            externalService.willFail();
+            breaker.call();
+            clock.advanceSeconds(15);
+            breaker.call();
+            clock.advanceSeconds(14);
+            breaker.call();
+
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.OPEN);
+        }
+    }
+
+    @Nested
+    @DisplayName("successes while CLOSED")
+    class SuccessesWhileClosed {
+
+        /**
+         * Decision: a success does not wipe the failure history. The rule is "3 failures within
+         * 30 seconds", not "3 consecutive failures", so a dependency that flaps
+         * (fail, ok, fail, ok, fail) still trips the breaker.
+         */
+        @Test
+        void successDoesNotResetTheFailureHistory() {
+            externalService.willFail();
+            breaker.call();
+            clock.advanceSeconds(1);
+            breaker.call();
+
+            externalService.willSucceed();
+            clock.advanceSeconds(1);
+            assertThat(breaker.call()).isEqualTo(CallResult.SUCCESS);
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.CLOSED);
+
+            externalService.willFail();
+            clock.advanceSeconds(1);
+            breaker.call();
+
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.OPEN);
+        }
+    }
+
+    @Nested
+    @DisplayName("external service throws")
+    class ExternalServiceThrows {
+
+        /**
+         * Decision: an exception is a failure as far as the breaker is concerned, but the
+         * breaker does not swallow it. A dependency that times out must still be able to
+         * trip the circuit, and the caller must still find out that something went wrong.
+         */
+        @Test
+        void exceptionPropagatesAndCountsAsAFailure() {
+            externalService.willThrow(new IllegalStateException("bank timed out"));
+
+            for (int i = 0; i < FAILURE_THRESHOLD; i++) {
+                assertThatThrownBy(breaker::call)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("bank timed out");
+                clock.advanceSeconds(1);
+            }
+
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.OPEN);
+            assertThat(externalService.invocationCount()).isEqualTo(FAILURE_THRESHOLD);
         }
 
         @Test
-        @Disabled("TODO(candidate): what if the external service throws instead of returning false?")
-        void externalServiceThrowsAnException() {
-            // Should an exception count as a failure? Should it propagate? Should the
-            // circuit still be able to open? StubExternalService will need a small extension.
+        void exceptionDuringTheTrialReopensTheCircuit() {
+            externalService.willFail();
+            breaker.call();
+            breaker.call();
+            breaker.call();
+            clock.advance(OPEN_DURATION);
+
+            externalService.willThrow(new IllegalStateException("still down"));
+            assertThatThrownBy(breaker::call).isInstanceOf(IllegalStateException.class);
+
+            assertThat(breaker.getState()).isEqualTo(CircuitBreakerState.OPEN);
+            clock.advanceSeconds(1);
+            assertThat(breaker.call()).isEqualTo(CallResult.REJECTED);
         }
     }
 }

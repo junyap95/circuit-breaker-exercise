@@ -8,19 +8,29 @@ package com.example.circuitbreaker.breaker;
 public final class StubExternalService implements ExternalService {
 
     private boolean nextResult = true;
+    private RuntimeException nextException = null;
     private int invocationCount = 0;
 
     public void willSucceed() {
         nextResult = true;
+        nextException = null;
     }
 
     public void willFail() {
         nextResult = false;
+        nextException = null;
+    }
+
+    public void willThrow(RuntimeException exception) {
+        nextException = exception;
     }
 
     @Override
     public boolean call() {
         invocationCount++;
+        if (nextException != null) {
+            throw nextException;
+        }
         return nextResult;
     }
 

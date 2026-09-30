@@ -22,9 +22,13 @@ interview. Everything compiles and runs; the interesting logic is missing and cl
 ./gradlew test
 ```
 
-The initial suite is green but several tests are `@Disabled` with a `TODO(candidate)` message.
-They describe behaviour the current implementation does not have. The exercise is finished when
-you can remove every `@Disabled` and the suite still passes.
+On `main` the suite is green but several tests are `@Disabled` with a `TODO(candidate)` message.
+They describe behaviour the skeleton does not have. The exercise is finished when you can remove
+every `@Disabled` and the suite still passes.
+
+This branch (`feat/circuit-breaker-implementation`) is one candidate's completed attempt: every
+test is enabled and the three open-ended cases have been decided and tested. See the commit
+history for the incremental steps.
 
 Run a single test class while iterating:
 
@@ -129,15 +133,18 @@ Timing boundaries are easy to get wrong, so this project fixes them:
 - Plain Java collections only. No Resilience4j, no scheduling, no threads.
 - Keep `call()` short; extract private helpers with descriptive names.
 
-## Things left deliberately open
+## Things left deliberately open (and how this branch decided them)
 
-The bottom of `CircuitBreakerTest` has three empty tests for you to decide on and write:
+On `main`, the bottom of `CircuitBreakerTest` has three empty tests to decide on and write.
+This branch chose:
 
-- a failure sitting exactly on the 30-second boundary,
-- whether a success while `CLOSED` should forget earlier failures,
-- what to do if the external service throws instead of returning `false`.
+- **Boundary**: a failure exactly 30 s old has expired (`<=` rule from above); 29 s old still counts.
+- **Success while `CLOSED`**: does not reset the failure history. The rule is "3 failures in
+  30 s", not "3 consecutive failures", so a flapping dependency still trips the breaker.
+- **Exceptions**: a `RuntimeException` from the service counts as a failure (including during the
+  trial) and is rethrown, so the caller still sees the original error.
 
-There is no single right answer to the last two. Pick one, justify it, and encode it in a test.
+There is no single right answer to the last two; the tests document the choice.
 
 ## Possible follow-ups an interviewer might add
 

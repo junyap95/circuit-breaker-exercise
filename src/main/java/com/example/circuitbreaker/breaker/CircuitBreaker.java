@@ -8,20 +8,26 @@ import java.util.Deque;
 /**
  * Protects callers from an unhealthy {@link ExternalService}.
  *
- * <p>Intended behaviour (see README for the full rules):
+ * <p>Behaviour (see README for the full rules):
  * <ul>
  *   <li>While {@link CircuitBreakerState#CLOSED}, calls pass through to the service.</li>
  *   <li>If {@code failureThreshold} failures happen within {@code failureWindow}
- *       (a sliding window ending "now"), the circuit opens.</li>
+ *       (a sliding window ending "now"), the circuit opens. Successes in between do not
+ *       reset the count.</li>
  *   <li>While {@link CircuitBreakerState#OPEN}, calls are rejected without touching
  *       the service until {@code openDuration} has elapsed since it opened.</li>
  *   <li>Once the cooldown has elapsed, a single trial call is let through
  *       ({@link CircuitBreakerState#HALF_OPEN}). Success closes the circuit and
  *       clears any failure history; failure re-opens it with a fresh cooldown.</li>
+ *   <li>A {@link RuntimeException} from the service counts as a failure and is rethrown.</li>
  * </ul>
  *
- * <p>This class is used from a single thread in the exercise; thread safety is a
- * follow-up discussion, not a requirement of the initial implementation.
+ * <p>Boundaries: a failure expires when {@code failureTime <= now - failureWindow}; the
+ * trial is allowed when {@code now >= openedAt + openDuration}.
+ *
+ * <p>Not thread-safe. State transitions happen lazily on {@link #call()}, so
+ * {@link #getState()} may report {@code OPEN} for a circuit whose cooldown has elapsed
+ * but which has not been called since.
  *
  * <p>Always read the time through {@link #clock} (e.g. {@code Instant.now(clock)}) so
  * that tests can control it.
@@ -62,7 +68,15 @@ public class CircuitBreaker {
             state = CircuitBreakerState.HALF_OPEN;
         }
 
-        boolean succeeded = externalService.call();
+        boolean succeeded;
+        try {
+            succeeded = externalService.call();
+        } catch (RuntimeException e) {
+            // A dependency that blows up is at least as unhealthy as one that says "no".
+            // Record it, but let the caller see the original error.
+            onFailure(now);
+            throw e;
+        }
 
         if (succeeded) {
             onSuccess();
