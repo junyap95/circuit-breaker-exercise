@@ -2,24 +2,32 @@ package com.example.circuitbreaker.breaker;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * Protects callers from an unhealthy {@link ExternalService}.
  *
- * <p>Intended behaviour (see README for the full rules):
+ * <p>Behaviour (see README for the full rules):
  * <ul>
  *   <li>While {@link CircuitBreakerState#CLOSED}, calls pass through to the service.</li>
  *   <li>If {@code failureThreshold} failures happen within {@code failureWindow}
- *       (a sliding window ending "now"), the circuit opens.</li>
+ *       (a sliding window ending "now"), the circuit opens. Successes in between do not
+ *       reset the count.</li>
  *   <li>While {@link CircuitBreakerState#OPEN}, calls are rejected without touching
  *       the service until {@code openDuration} has elapsed since it opened.</li>
  *   <li>Once the cooldown has elapsed, a single trial call is let through
  *       ({@link CircuitBreakerState#HALF_OPEN}). Success closes the circuit and
  *       clears any failure history; failure re-opens it with a fresh cooldown.</li>
+ *   <li>A {@link RuntimeException} from the service counts as a failure and is rethrown.</li>
  * </ul>
  *
- * <p>This class is used from a single thread in the exercise; thread safety is a
- * follow-up discussion, not a requirement of the initial implementation.
+ * <p>Boundaries: a failure expires when {@code failureTime <= now - failureWindow}; the
+ * trial is allowed when {@code now >= openedAt + openDuration}.
+ *
+ * <p>Not thread-safe. State transitions happen lazily on {@link #call()}, so
+ * {@link #getState()} may report {@code OPEN} for a circuit whose cooldown has elapsed
+ * but which has not been called since.
  *
  * <p>Always read the time through {@link #clock} (e.g. {@code Instant.now(clock)}) so
  * that tests can control it.
@@ -35,9 +43,11 @@ public class CircuitBreaker {
     /** When the circuit last transitioned to OPEN. Only meaningful while OPEN. */
     private Instant openedAt = null;
 
-    // TODO(candidate): you will need somewhere to remember recent failures so that you
-    // can count how many happened within the failure window. Choose a representation
-    // and be ready to talk about why you picked it.
+    /**
+     * Timestamps of failures seen while CLOSED, oldest first. Only entries inside the
+     * failure window are kept; expired ones are dropped from the front on each failure.
+     */
+    private final Deque<Instant> recentFailures = new ArrayDeque<>();
 
     public CircuitBreaker(ExternalService externalService, Clock clock, CircuitBreakerProperties properties) {
         this.externalService = externalService;
@@ -47,26 +57,82 @@ public class CircuitBreaker {
 
     /**
      * Calls the external service, subject to the state of the circuit.
-     *
-     * <p>TODO(candidate): this is currently a plain pass-through that ignores the circuit
-     * state entirely. It needs to:
-     * <ol>
-     *   <li>refuse the call (returning {@link CallResult#REJECTED} and <em>not</em> touching
-     *       the external service) while the circuit is open and the cooldown has not elapsed;</li>
-     *   <li>record failures and open the circuit once the threshold is reached within the window;</li>
-     *   <li>let a single trial call through after the cooldown, then close or re-open the
-     *       circuit depending on the result.</li>
-     * </ol>
-     *
-     * <p>Keep this method small; push the details into well-named private helpers.
      */
     public CallResult call() {
-        boolean succeeded = externalService.call();
+        Instant now = now();
+
+        if (state == CircuitBreakerState.OPEN) {
+            if (!cooldownElapsed(now)) {
+                return CallResult.REJECTED;
+            }
+            state = CircuitBreakerState.HALF_OPEN;
+        }
+
+        boolean succeeded;
+        try {
+            succeeded = externalService.call();
+        } catch (RuntimeException e) {
+            // A dependency that blows up is at least as unhealthy as one that says "no".
+            // Record it, but let the caller see the original error.
+            onFailure(now);
+            throw e;
+        }
+
+        if (succeeded) {
+            onSuccess();
+        } else {
+            onFailure(now);
+        }
         return succeeded ? CallResult.SUCCESS : CallResult.FAILURE;
     }
 
     public CircuitBreakerState getState() {
         return state;
+    }
+
+    /** The trial is allowed once {@code openDuration} has fully elapsed (inclusive). */
+    private boolean cooldownElapsed(Instant now) {
+        return !now.isBefore(openedAt.plus(properties.openDuration()));
+    }
+
+    private void onSuccess() {
+        if (state == CircuitBreakerState.HALF_OPEN) {
+            close();
+        }
+        // While CLOSED a success changes nothing: the window counts failures regardless of
+        // successes in between, so a flapping dependency can still trip the breaker.
+    }
+
+    private void onFailure(Instant now) {
+        if (state == CircuitBreakerState.HALF_OPEN) {
+            open(now); // failed trial: back to OPEN with a fresh cooldown
+            return;
+        }
+        recentFailures.addLast(now);
+        evictExpiredFailures(now);
+        if (recentFailures.size() >= properties.failureThreshold()) {
+            open(now);
+        }
+    }
+
+    /** A failure has expired once it is {@code failureWindow} old or older. */
+    private void evictExpiredFailures(Instant now) {
+        Instant cutoff = now.minus(properties.failureWindow());
+        while (!recentFailures.isEmpty() && !recentFailures.peekFirst().isAfter(cutoff)) {
+            recentFailures.pollFirst();
+        }
+    }
+
+    private void open(Instant now) {
+        state = CircuitBreakerState.OPEN;
+        openedAt = now;
+        recentFailures.clear();
+    }
+
+    private void close() {
+        state = CircuitBreakerState.CLOSED;
+        openedAt = null;
+        recentFailures.clear();
     }
 
     private Instant now() {
