@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: circuit-breaker-interview
+
+server:
+  port: 8080
+
+circuit-breaker:
+  failure-threshold: 3
+  failure-window: 30s
+  open-duration: 10s
+
+logging:
+  level:
+    com.example.circuitbreaker: INFO
