@@ -89,7 +89,6 @@ class CircuitBreakerTest {
     class OpeningTheCircuit {
 
         @Test
-        @Disabled("TODO(candidate): enable once failures are counted")
         void threeFailuresWithinTheWindowOpenTheCircuit() {
             // 12:00:00, 12:00:10, 12:00:20 - all inside one 30-second window
             externalService.willFail();
@@ -103,7 +102,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the sliding window is implemented")
         void failuresOlderThanTheWindowAreNotCounted() {
             // 12:00:00, 12:00:20, 12:00:31 - by the third failure the first one has expired
             externalService.willFail();
@@ -117,7 +115,6 @@ class CircuitBreakerTest {
         }
 
         @Test
-        @Disabled("TODO(candidate): enable once the sliding window is implemented")
         void aFourthFailureCanOpenTheCircuitEvenIfTheFirstOneExpired() {
             // 12:00:00 expires; 12:00:20, 12:00:31, 12:00:35 are three failures inside a window
             externalService.willFail();

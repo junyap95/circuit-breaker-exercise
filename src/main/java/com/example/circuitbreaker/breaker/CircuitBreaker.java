@@ -2,6 +2,8 @@ package com.example.circuitbreaker.breaker;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * Protects callers from an unhealthy {@link ExternalService}.
@@ -35,9 +37,11 @@ public class CircuitBreaker {
     /** When the circuit last transitioned to OPEN. Only meaningful while OPEN. */
     private Instant openedAt = null;
 
-    // TODO(candidate): you will need somewhere to remember recent failures so that you
-    // can count how many happened within the failure window. Choose a representation
-    // and be ready to talk about why you picked it.
+    /**
+     * Timestamps of failures seen while CLOSED, oldest first. Only entries inside the
+     * failure window are kept; expired ones are dropped from the front on each failure.
+     */
+    private final Deque<Instant> recentFailures = new ArrayDeque<>();
 
     public CircuitBreaker(ExternalService externalService, Clock clock, CircuitBreakerProperties properties) {
         this.externalService = externalService;
@@ -47,26 +51,42 @@ public class CircuitBreaker {
 
     /**
      * Calls the external service, subject to the state of the circuit.
-     *
-     * <p>TODO(candidate): this is currently a plain pass-through that ignores the circuit
-     * state entirely. It needs to:
-     * <ol>
-     *   <li>refuse the call (returning {@link CallResult#REJECTED} and <em>not</em> touching
-     *       the external service) while the circuit is open and the cooldown has not elapsed;</li>
-     *   <li>record failures and open the circuit once the threshold is reached within the window;</li>
-     *   <li>let a single trial call through after the cooldown, then close or re-open the
-     *       circuit depending on the result.</li>
-     * </ol>
-     *
-     * <p>Keep this method small; push the details into well-named private helpers.
      */
     public CallResult call() {
+        Instant now = now();
+
         boolean succeeded = externalService.call();
+
+        if (!succeeded) {
+            recordFailure(now);
+        }
         return succeeded ? CallResult.SUCCESS : CallResult.FAILURE;
     }
 
     public CircuitBreakerState getState() {
         return state;
+    }
+
+    private void recordFailure(Instant now) {
+        recentFailures.addLast(now);
+        evictExpiredFailures(now);
+        if (recentFailures.size() >= properties.failureThreshold()) {
+            open(now);
+        }
+    }
+
+    /** A failure has expired once it is {@code failureWindow} old or older. */
+    private void evictExpiredFailures(Instant now) {
+        Instant cutoff = now.minus(properties.failureWindow());
+        while (!recentFailures.isEmpty() && !recentFailures.peekFirst().isAfter(cutoff)) {
+            recentFailures.pollFirst();
+        }
+    }
+
+    private void open(Instant now) {
+        state = CircuitBreakerState.OPEN;
+        openedAt = now;
+        recentFailures.clear();
     }
 
     private Instant now() {
